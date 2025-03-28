@@ -47,10 +47,14 @@ def get_top_headline():
         else:
             print(f"Failed to fetch page. Status code: {response.status_code}")  # 添加日志
             return None
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching page: {e}")  # 捕获网络请求相关的异常
+        return None
     except Exception as e:
-        print(f"Error fetching page: {e}")  # 添加日志
+        print(f"Unexpected error: {e}")  # 捕获其它可能的异常
         return None
 
+# 路由：获取头条新闻
 @app.get("/api/get-top-headline")
 async def get_top_headline_api():
     headline = get_top_headline()  # 获取单个头条
@@ -58,3 +62,8 @@ async def get_top_headline_api():
         return JSONResponse(content={"message": "Failed to fetch headline"}, status_code=500)
     
     return {"headline": headline}  # 返回单个头条新闻
+
+# 路由：主页
+@app.get("/")
+async def read_root():
+    return {"message": "Welcome to the News API! Go to /api/get-top-headline to fetch top headline."}
