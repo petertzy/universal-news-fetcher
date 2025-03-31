@@ -3,67 +3,137 @@ import requests
 from bs4 import BeautifulSoup
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from urllib.parse import urljoin
+import os
+from dotenv import load_dotenv
 
 app = FastAPI()
 
-# 配置 CORS，允许前端访问
+# Configure CORS to allow frontend access
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # 允许前端来自 localhost:3000 的请求
+    allow_origins=["http://localhost:3000"],  # Allow requests from frontend
     allow_credentials=True,
-    allow_methods=["*"],  # 允许所有 HTTP 方法
-    allow_headers=["*"],  # 允许所有请求头
+    allow_methods=["*"],  # Allow all HTTP methods
+    allow_headers=["*"],  # Allow all request headers
 )
 
-# 获取福克斯新闻首页的头条新闻
+# Load environment variables
+load_dotenv()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_API_URL = os.getenv("GEMINI_API_URL")
+
+# Function to fetch the top headline from Fox News
 def get_top_headline():
     url = "https://www.foxnews.com/"
-    print(f"Fetching URL: {url}")  # 添加日志
+    print(f"Fetching URL: {url}")  # Log fetching attempt
+
     try:
-        response = requests.get(url, timeout=10)  # 设置超时，避免请求卡住
-        if response.status_code == 200:
-            print("Successfully fetched the page.")  # 添加日志
-            soup = BeautifulSoup(response.text, 'html.parser')
-
-            # 获取第一条头条新闻
-            headline_element = soup.find('h3', class_='title')  # 查找第一个 h3.title
-            if not headline_element:
-                print("No headline found.")  # 添加日志
-                return None
-
-            headline_link = headline_element.find('a')  # 获取链接
-            if not headline_link:
-                return None
-
-            title = headline_link.get_text(strip=True)  # 获取标题文本并去除多余空格
-            link = headline_link['href']
-            if not link.startswith('http'):
-                link = f"https://www.foxnews.com{link}"  # 构建完整链接
-
-            return {
-                'title': title,
-                'link': link
-            }
-        else:
-            print(f"Failed to fetch page. Status code: {response.status_code}")  # 添加日志
+        response = requests.get(url, timeout=10)  # Set a timeout to avoid hanging requests
+        if response.status_code != 200:
+            print(f"Failed to fetch page. Status code: {response.status_code}")
             return None
+
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        # Get the first headline
+        headline_element = soup.find('h3', class_='title')
+        if not headline_element:
+            print("No headline found.")
+            return None
+
+        headline_link = headline_element.find('a')
+        if not headline_link:
+            print("No link found in the headline.")
+            return None
+
+        # Extract headline text
+        headline_text = headline_link.get_text(strip=True)
+        print(f"Original headline: {headline_text}")
+
+        link = headline_link['href']
+        if not link.startswith('http'):
+            link = f"https://www.foxnews.com{link}"
+
+        # Get image URL
+        image_element = soup.find('picture')
+        image_url = None
+        if image_element:
+            img_tag = image_element.find('img')
+            if img_tag and 'src' in img_tag.attrs:
+                image_url = img_tag['src']
+                if image_url.startswith('//'):
+                    image_url = urljoin('https:', image_url)
+
+        return {
+            'title': "FOX: " + headline_text,
+            'link': link,
+            'image': image_url
+        }
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching page: {e}")  # 捕获网络请求相关的异常
+        print(f"Error fetching page: {e}")
         return None
     except Exception as e:
-        print(f"Unexpected error: {e}")  # 捕获其它可能的异常
+        print(f"Unexpected error: {e}")
         return None
 
-# 路由：获取头条新闻
+# Function to translate the headline using Gemini API
+def translate_title_to_german(title):
+    url = f"{GEMINI_API_URL}?key={GEMINI_API_KEY}"
+    
+    headers = {
+        'Content-Type': 'application/json'
+    }
+    
+    data = {
+        "contents": [{
+            "parts": [{"text": f"Translate this into Chinese. Only provide the translated text, nothing else: {title}"}]
+        }]
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=data)
+        response.raise_for_status()
+        result = response.json()
+        
+        print(f"Gemini API response: {result}")  # Debugging output
+
+        if 'candidates' not in result or not result['candidates']:
+            print("No candidates found in response.")
+            return "Translation failed"
+
+        candidate = result['candidates'][0]
+        if 'content' not in candidate or 'parts' not in candidate['content'] or not candidate['content']['parts']:
+            print("Unexpected response structure.")
+            return "Translation failed"
+
+        translated_text = candidate['content']['parts'][0]['text']
+        return translated_text.strip()
+    
+    except requests.exceptions.RequestException as e:
+        print(f"Request failed: {e}")
+        return "Translation failed"
+
+# API endpoint to get both the original and translated headlines
 @app.get("/api/get-top-headline")
 async def get_top_headline_api():
-    headline = get_top_headline()  # 获取单个头条
-    if not headline:
-        return JSONResponse(content={"message": "Failed to fetch headline"}, status_code=500)
-    
-    return {"headline": headline}  # 返回单个头条新闻
+    original_headline = get_top_headline()
 
-# 路由：主页
+    if not original_headline:
+        return JSONResponse(content={"message": "Failed to fetch headline"}, status_code=500)
+
+    # Get the German translation
+    german_translation = translate_title_to_german(original_headline['title'])
+
+    translated_headline = {
+        'title': "FOX: " + german_translation,  # Add FOX prefix to translated title
+        'link': original_headline['link'],
+        'image': original_headline['image']
+    }
+
+    return {"headlines": [translated_headline, original_headline]}
+
+# Root endpoint
 @app.get("/")
 async def read_root():
-    return {"message": "Welcome to the News API! Go to /api/get-top-headline to fetch top headline."}
+    return {"message": "Welcome to the News API! Go to /api/get-top-headline to fetch top headlines."}
