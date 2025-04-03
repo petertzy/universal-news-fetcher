@@ -43,7 +43,7 @@ def get_article_body(link):
 
         article_container = soup.find('div', class_='article-body')
         if article_container:
-            paragraphs = article_container.find_all('p')
+            paragraphs = article_container.find_all('p')[:3]
             body_text = ' '.join(html.unescape(p.get_text()) for p in paragraphs)
 
             body_text = body_text.replace('\xa0', ' ')
